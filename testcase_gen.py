@@ -260,7 +260,7 @@ def main():
     os.makedirs(args.outdir, exist_ok=True)
     
     for i in range(args.count):
-        filepath = os.path.join(args.outdir, f"{args.prefix}_{i:03d}.city")
+        filepath = os.path.join(args.outdir, f"{args.prefix}.city")
         instance = None
         
         if args.mode == 'constructive':

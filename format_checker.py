@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """
-format checker for Assignment 3
+format checker for Assignment 3 (with optional GUI rendering)
 
 Usage:
-    python3 format_checker.py <basename> [--verbose|-v]
+    # Original (basename-only) usage
+    python3 format_checker.py <basename> [--verbose|-v] [--show] [--save-plot PNG] [--title TXT]
 
-Reads:
+    # Explicit file paths usage (now supported)
+    python3 format_checker.py <file.city> <file.metromap> [--verbose|-v] [--show] [--save-plot PNG] [--title TXT]
+
+Reads (basename mode):
     <basename>.city      (required)
     <basename>.metromap  (required)
 
 Behavior:
- - If <basename>.metromap is a single '0' (UNSAT), prints:
+ - If metromap is a single '0' (UNSAT), prints:
        UNSAT
-   and exits with code 0.
+   and exits with code 0. If --show/--save-plot is provided, renders just the grid/endpoints/popular cells (no paths).
 
  - If metromap claims SAT (provides paths), the script evaluates constraints and prints a report.
-   Default (non-verbose): prints only one line per constraint (VALID/INVALID and a short summary).
-   Verbose mode (--verbose or -v): prints per-metro / per-popular-cell details in addition.
+   Default (non-verbose): prints one line per constraint summary.
+   Verbose mode (--verbose or -v): prints per-metro / per-popular-cell details.
+   If --show/--save-plot is provided, renders the grid with endpoints, popular cells, and the reconstructed paths.
 
 Constraints (checked for SAT case):
  1) At most 1 metro line per grid cell (global).
@@ -33,6 +38,13 @@ from __future__ import print_function
 import sys
 import re
 from collections import namedtuple
+import os
+
+# Optional matplotlib for visualization
+try:
+    import matplotlib.pyplot as plt
+except Exception:
+    plt = None
 
 MetroSpec = namedtuple(
     'MetroSpec', ['scenario', 'N', 'M', 'K', 'J', 'P', 'starts', 'ends', 'popular'])
@@ -165,6 +177,87 @@ def parse_metromap(path):
                 parsed.append(t.upper())
             metros.append(parsed)
     return 'SAT', metros
+
+
+def reconstruct_paths(spec, metro_moves):
+    """Reconstruct per-line cell paths from direction sequences and starts.
+    Returns list of lists of (x,y).
+    """
+    dirvec = {'L': (-1, 0), 'R': (1, 0), 'U': (0, -1), 'D': (0, 1)}
+    paths = []
+    for k in range(spec.K):
+        sx, sy = spec.starts[k]
+        x, y = sx, sy
+        cells = [(x, y)]
+        for mv in metro_moves[k]:
+            dx, dy = dirvec.get(mv, (0, 0))
+            x += dx; y += dy
+            # Clamp to grid to avoid plotting errors in case of invalid paths
+            x = max(0, min(spec.N - 1, x))
+            y = max(0, min(spec.M - 1, y))
+            cells.append((x, y))
+        paths.append(cells)
+    return paths
+
+
+def plot_city(spec, paths=None, title=None, save_path=None, show=False):
+    """Visualize the grid, endpoints, popular cells, and optional per-line paths using matplotlib."""
+    if plt is None:
+        print("matplotlib is not installed; cannot display/save plot.", file=sys.stderr)
+        return
+    N, M, K = spec.N, spec.M, spec.K
+    fig, ax = plt.subplots(figsize=(max(5, N * 0.6), max(5, M * 0.6)))
+    # Grid
+    for x in range(N + 1):
+        ax.plot([x, x], [0, M], color='#ddd', linewidth=1)
+    for y in range(M + 1):
+        ax.plot([0, N], [y, y], color='#ddd', linewidth=1)
+    def center(cx, cy):
+        return cx + 0.5, cy + 0.5
+    # Colors
+    import itertools
+    colors = itertools.cycle(['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00', '#a65628', '#f781bf', '#999999'])
+    # Paths
+    if paths:
+        for path in paths:
+            col = next(colors)
+            xs, ys = [], []
+            for (cx, cy) in path:
+                px, py = center(cx, cy)
+                xs.append(px); ys.append(py)
+            ax.plot(xs, ys, color=col, linewidth=2.5, solid_capstyle='round')
+    # Endpoints
+    colors = itertools.cycle(['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00', '#a65628', '#f781bf', '#999999'])
+    for k in range(K):
+        sx, sy = spec.starts[k]; ex, ey = spec.ends[k]
+        col = next(colors)
+        sxp, syp = center(sx, sy)
+        exp, eyp = center(ex, ey)
+        ax.scatter([sxp], [syp], s=80, c=col, marker='o', edgecolors='black', zorder=3)
+        ax.scatter([exp], [eyp], s=80, c=col, marker='s', edgecolors='black', zorder=3)
+        ax.text(sxp, syp, f" {k}S", fontsize=9, va='center', ha='left')
+        ax.text(exp, eyp, f" {k}E", fontsize=9, va='center', ha='left')
+    # Popular cells
+    if spec.scenario == 2 and spec.popular:
+        for (px, py) in spec.popular:
+            cx, cy = center(px, py)
+            ax.scatter([cx], [cy], s=50, c='gold', marker='*', edgecolors='black', zorder=3)
+    # Axes (origin top-left)
+    ax.set_aspect('equal')
+    ax.set_xlim(0, N)
+    ax.set_ylim(M, 0)
+    ax.set_xticks(range(N))
+    ax.set_yticks(range(M))
+    ax.set_title(title or 'Metro Map Check')
+    ax.set_xlabel('x (columns)')
+    ax.set_ylabel('y (rows)')
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150)
+        print(f"Saved plot to {save_path}")
+    if show:
+        plt.show()
+    plt.close(fig)
 
 
 def analyze_constraints(spec, metro_moves):
@@ -370,25 +463,29 @@ def verbose_print(report, spec):
 
 
 def main():
-    # Accept: python3 format_checker.py <basename> [--verbose|-v]
-    if len(sys.argv) < 2 or len(sys.argv) > 3:
-        print(
-            "Usage: python3 format_checker.py <basename> [--verbose|-v]", file=sys.stderr)
-        sys.exit(1)
-    base = sys.argv[1]
-    verbose = False
-    if len(sys.argv) == 3:
-        flag = sys.argv[2].lower()
-        if flag in ('-v', '--verbose', 'verbose'):
-            verbose = True
-        else:
-            print("Unknown flag: %r" % sys.argv[2], file=sys.stderr)
-            print(
-                "Usage: python3 format_checker.py <basename> [--verbose|-v]", file=sys.stderr)
-            sys.exit(1)
+    # Flexible CLI:
+    #   - python3 format_checker.py <basename> [--verbose|-v] [--show] [--save-plot PNG] [--title TXT]
+    #   - python3 format_checker.py <file.city> <file.metromap> [--verbose|-v] [--show] [--save-plot PNG] [--title TXT]
+    import argparse
+    parser = argparse.ArgumentParser(description='Format checker for Metro Map (with optional GUI).')
+    parser.add_argument('inputs', nargs='+', help='Either <basename> or <file.city> <file.metromap>')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
+    parser.add_argument('--show', action='store_true', help='Show matplotlib GUI rendering')
+    parser.add_argument('--save-plot', dest='save_plot', default=None, help='Save rendering to PNG path')
+    parser.add_argument('--title', default=None, help='Plot title')
+    args = parser.parse_args()
 
-    cityf = base + '.city'
-    mapf = base + '.metromap'
+    # Interpret inputs
+    if len(args.inputs) == 1:
+        base = args.inputs[0]
+        cityf = base + '.city'
+        mapf = base + '.metromap'
+    elif len(args.inputs) >= 2:
+        cityf = args.inputs[0]
+        mapf = args.inputs[1]
+    else:
+        parser.error('Missing inputs')
+
     try:
         spec = parse_city(cityf)
     except Exception as e:
@@ -399,9 +496,12 @@ def main():
         fail("Metromap parse error: %s" % e)
     if state == 'UNSAT':
         print("UNSAT")
+        # Optional rendering without paths
+        if args.show or args.save_plot:
+            plot_city(spec, paths=None, title=args.title or os.path.basename(cityf), save_path=args.save_plot, show=args.show)
         sys.exit(0)
     report = analyze_constraints(spec, metro_moves)
-    if verbose:
+    if args.verbose:
         verbose_print(report, spec)
     else:
         # non-verbose: one short line per applicable constraint, then final verdict
@@ -410,6 +510,10 @@ def main():
             print(ln)
         print("FINAL VERDICT: %s" %
               ("VALID" if report['final_valid'] else "INVALID"))
+    # Optional rendering with paths
+    if args.show or args.save_plot:
+        paths = reconstruct_paths(spec, metro_moves)
+        plot_city(spec, paths=paths, title=args.title or os.path.basename(cityf), save_path=args.save_plot, show=args.show)
     sys.exit(0 if report['final_valid'] else 1)
 
 
