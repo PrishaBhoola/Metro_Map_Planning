@@ -1,0 +1,6 @@
+make clean && ./compile.sh && ./run1.sh test && minisat test.satinput test.satoutput
+./run2.sh test && python3 format_checker.py test --verbose
+
+./run2.sh test && python3 format_checker.py test --show
+
+python3 testcase_gen.py --N 8 --M 6 --K 2 --J 1 --prefix test
